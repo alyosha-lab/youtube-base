@@ -1,4 +1,5 @@
 """
+YouTube评论情感分析后端API
 依赖安装: pip install fastapi uvicorn google-api-python-client transformers torch emoji redis
 注意: 不要使用 modelscope，使用 transformers 来加载本地模型
 需要先启动Redis: redis-server (默认端口6379)
@@ -30,7 +31,7 @@ app.add_middleware(
 )
 
 # ============ 配置部分 ============
-YOUTUBE_API_KEY = "YOUR_API_KEY_HERE"  # 请替换为你自己的API密钥（不要暴露在代码中）
+YOUTUBE_API_KEY = "AIzaSyDysqwkHhcdmCCP6aUyLN9gKVN86p1VTHk"  # 请替换为你自己的API密钥（不要暴露在代码中）
 MODEL_PATH = os.path.abspath("./models/modernBERT-multilingual-finetune")  # 使用绝对路径
 MAX_LENGTH = 256
 CACHE_EXPIRY = 3600  # Redis缓存过期时间：1小时（3600秒）
@@ -106,8 +107,9 @@ class VideoRequest(BaseModel):
 
 
 class CommentSample(BaseModel):
-    text: str
-    sentiment: str
+    positive: List[str]
+    negative: List[str]
+    neutral: List[str]
 
 
 class AnalysisResponse(BaseModel):
@@ -115,7 +117,7 @@ class AnalysisResponse(BaseModel):
     negative: int
     neutral: int
     total_comments: int
-    comment_samples: List[CommentSample]
+    comment_samples: CommentSample
 
 
 # ============ Redis缓存函数 ============
@@ -272,7 +274,11 @@ def classify_comments(comments: List[str]) -> Dict:
         'negative': y%,
         'neutral': z%,
         'total_comments': n,
-        'comment_samples': [前10条评论及其情感]
+        'comment_samples': {
+            'positive': [10条积极评论],
+            'negative': [10条消极评论],
+            'neutral': [10条中性评论]
+        }
     }
     """
     if not comments:
@@ -281,7 +287,11 @@ def classify_comments(comments: List[str]) -> Dict:
             'negative': 0,
             'neutral': 0,
             'total_comments': 0,
-            'comment_samples': []
+            'comment_samples': {
+                'positive': [],
+                'negative': [],
+                'neutral': []
+            }
         }
 
     # 清洗文本
@@ -296,7 +306,11 @@ def classify_comments(comments: List[str]) -> Dict:
             'negative': 0,
             'neutral': 0,
             'total_comments': 0,
-            'comment_samples': []
+            'comment_samples': {
+                'positive': [],
+                'negative': [],
+                'neutral': []
+            }
         }
 
     # 只对清洗后的非空评论进行预测
@@ -335,15 +349,23 @@ def classify_comments(comments: List[str]) -> Dict:
 
     total = len(predictions)
 
-    # 生成前10条评论示例（使用原始评论文本）
-    comment_samples = []
-    for i in range(min(10, len(comment_pairs))):
-        original_comment, _ = comment_pairs[i]
+    # 按情感分类收集评论
+    categorized_comments = {
+        'positive': [],
+        'negative': [],
+        'neutral': []
+    }
+
+    for i, (original_comment, _) in enumerate(comment_pairs):
         sentiment = id2label[predictions[i]]
-        comment_samples.append({
-            'text': original_comment,
-            'sentiment': sentiment
-        })
+        categorized_comments[sentiment].append(original_comment)
+
+    # 每种情感取前3条
+    comment_samples = {
+        'positive': categorized_comments['positive'][:10],
+        'negative': categorized_comments['negative'][:10],
+        'neutral': categorized_comments['neutral'][:10]
+    }
 
     # 转换为百分比
     return {
@@ -487,6 +509,7 @@ async def test_predict(text: str):
         raise HTTPException(status_code=500, detail=f"预测失败: {str(e)}")
 
 
+# ============ 启动服务 ============
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
